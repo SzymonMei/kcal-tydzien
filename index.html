@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0b0b0b" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Kcal Tydzień</title>
+  <style>
+    body{margin:0;font-family:system-ui;background:#0b0b0b;color:#fff}
+    .wrap{max-width:720px;margin:0 auto;padding:16px;display:grid;gap:12px}
+    .card{background:#171717;border-radius:14px;padding:14px}
+    label{color:#bdbdbd;font-size:12px;display:block;margin:8px 0 4px}
+    input{width:100%;box-sizing:border-box;background:#0f0f0f;color:#fff;border:1px solid #2a2a2a;border-radius:10px;padding:10px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    button{width:100%;border:0;border-radius:12px;padding:12px;font-weight:700;color:#fff;background:#2e7dff;margin-top:10px}
+    button.danger{background:#c0392b}
+    .item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 0;border-top:1px solid #2a2a2a}
+    .small{background:#2a2a2a;padding:8px 10px;border-radius:10px;font-size:12px}
+    .muted{color:#bdbdbd;font-size:12px}
+    .big{font-size:22px;font-weight:800}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2 style="margin:0">Kalorie & białko — tydzień</h2>
+
+    <div class="card" id="summary"></div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px">Ustawienia</h3>
+      <div class="row">
+        <div>
+          <label>Cel kcal / dzień</label>
+          <input id="goalKcal" inputmode="numeric" value="2000" />
+        </div>
+        <div>
+          <label>Cel białko / dzień (g)</label>
+          <input id="goalProtein" inputmode="numeric" value="120" />
+        </div>
+      </div>
+      <button class="danger" id="clearWeek">Wyczyść wpisy z tego tygodnia</button>
+      <p class="muted" style="margin:8px 0 0">Działa offline. Dane trzymane lokalnie w telefonie.</p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px">Dodaj wpis</h3>
+      <label>Nazwa</label>
+      <input id="name" placeholder="np. makaron" />
+
+      <div class="row">
+        <div>
+          <label>kcal</label>
+          <input id="kcal" inputmode="numeric" placeholder="np. 300" />
+        </div>
+        <div>
+          <label>białko (g)</label>
+          <input id="protein" inputmode="numeric" placeholder="np. 10" />
+        </div>
+      </div>
+
+      <button id="add">Dodaj</button>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px">Wpisy w tym tygodniu</h3>
+      <div id="list"></div>
+    </div>
+  </div>
+
+<script>
+  const KEY = "kcal_pwa_v1";
+
+  const $ = (id) => document.getElementById(id);
+
+  function parseNum(s){ 
+    const n = parseFloat(String(s).replace(",", "."));
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }
+
+  function startOfISOWeek(d){
+    const x = new Date(d);
+    const day = x.getDay(); // 0=Nd
+    const diff = (day === 0 ? -6 : 1) - day; // pon
+    x.setDate(x.getDate() + diff);
+    x.setHours(0,0,0,0);
+    return x;
+  }
+  function endOfISOWeek(d){
+    const s = startOfISOWeek(d);
+    const e = new Date(s);
+    e.setDate(e.getDate() + 7);
+    return e;
+  }
+  function fmt(d){
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = String(d.getDate()).padStart(2,"0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function load(){
+    try{
+      const raw = localStorage.getItem(KEY);
+      if(!raw) return { items: [], goalKcalPerDay:"2000", goalProteinPerDay:"120" };
+      const data = JSON.parse(raw);
+      return {
+        items: Array.isArray(data.items) ? data.items : [],
+        goalKcalPerDay: typeof data.goalKcalPerDay === "string" ? data.goalKcalPerDay : "2000",
+        goalProteinPerDay: typeof data.goalProteinPerDay === "string" ? data.goalProteinPerDay : "120",
+      };
+    }catch{
+      return { items: [], goalKcalPerDay:"2000", goalProteinPerDay:"120" };
+    }
+  }
+  function save(state){
+    localStorage.setItem(KEY, JSON.stringify(state));
+  }
+
+  let state = load();
+  $("goalKcal").value = state.goalKcalPerDay;
+  $("goalProtein").value = state.goalProteinPerDay;
+
+  function itemsThisWeek(){
+    const now = new Date();
+    const ws = startOfISOWeek(now).getTime();
+    const we = endOfISOWeek(now).getTime();
+    return state.items
+      .filter(it => {
+        const t = new Date(it.createdAt).getTime();
+        return t >= ws && t < we;
+      })
+      .sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt));
+  }
+
+  function render(){
+    state.goalKcalPerDay = $("goalKcal").value;
+    state.goalProteinPerDay = $("goalProtein").value;
+    save(state);
+
+    const now = new Date();
+    const ws = startOfISOWeek(now);
+    const we = endOfISOWeek(now);
+    const list = itemsThisWeek();
+
+    const sumKcal = list.reduce((a,it)=>a+(it.kcal||0),0);
+    const sumProt = list.reduce((a,it)=>a+(it.protein||0),0);
+
+    const goalK = parseNum(state.goalKcalPerDay) * 7;
+    const goalP = parseNum(state.goalProteinPerDay) * 7;
+
+    const diffK = Math.round(goalK - sumKcal);
+    const diffP = Math.round(goalP - sumProt);
+
+    $("summary").innerHTML = `
+      <div class="muted">Tydzień: ${fmt(ws)} → ${fmt(new Date(we.getTime()-1))}</div>
+      <div class="row" style="margin-top:10px">
+        <div class="card" style="padding:10px;background:#111">
+          <div class="muted">Zjedzone kcal</div>
+          <div class="big">${sumKcal}</div>
+          <div class="muted">Cel: ${Math.round(goalK)} • Różnica: ${diffK>=0?`-${diffK}`:`+${Math.abs(diffK)}`}</div>
+        </div>
+        <div class="card" style="padding:10px;background:#111">
+          <div class="muted">Białko (g)</div>
+          <div class="big">${sumProt}</div>
+          <div class="muted">Cel: ${Math.round(goalP)} • Różnica: ${diffP>=0?`-${diffP}`:`+${Math.abs(diffP)}`}</div>
+        </div>
+      </div>
+    `;
+
+    const listEl = $("list");
+    if(list.length===0){
+      listEl.innerHTML = `<div class="muted">Brak wpisów w tym tygodniu.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = list.map(it => `
+      <div class="item">
+        <div style="flex:1">
+          <div style="font-weight:700">${it.name}</div>
+          <div class="muted">${it.kcal} kcal • ${it.protein} g • ${fmt(new Date(it.createdAt))}</div>
+        </div>
+        <button class="small" data-del="${it.id}" style="width:auto;margin:0">Usuń</button>
+      </div>
+    `).join("");
+
+    listEl.querySelectorAll("[data-del]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const id = btn.getAttribute("data-del");
+        state.items = state.items.filter(x => x.id !== id);
+        save(state);
+        render();
+      });
+    });
+  }
+
+  $("add").addEventListener("click", ()=>{
+    const name = $("name").value.trim();
+    const kcal = Math.round(parseNum($("kcal").value));
+    const prot = Math.round(parseNum($("protein").value));
+
+    if(!name){ alert("Wpisz nazwę."); return; }
+    if(!kcal){ alert("Wpisz kcal (np. 300)."); return; }
+
+    state.items.unshift({
+      id: String(Date.now()),
+      name,
+      kcal,
+      protein: prot,
+      createdAt: new Date().toISOString(),
+    });
+    $("name").value=""; $("kcal").value=""; $("protein").value="";
+    save(state);
+    render();
+  });
+
+  $("goalKcal").addEventListener("input", render);
+  $("goalProtein").addEventListener("input", render);
+
+  $("clearWeek").addEventListener("click", ()=>{
+    if(!confirm("Usunąć wpisy z bieżącego tygodnia?")) return;
+    const now = new Date();
+    const ws = startOfISOWeek(now).getTime();
+    const we = endOfISOWeek(now).getTime();
+    state.items = state.items.filter(it=>{
+      const t = new Date(it.createdAt).getTime();
+      return !(t >= ws && t < we);
+    });
+    save(state);
+    render();
+  });
+
+  // PWA: service worker
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js");
+  }
+
+  render();
+</script>
+</body>
+</html>
